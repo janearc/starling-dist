@@ -75,8 +75,7 @@ type family struct {
 	labels []string
 
 	mu sync.Mutex
-	// encoded labels -> nothing; counters live below
-	series  map[string][]uint64
+	// encoded labels -> the handle for that label set
 	counter map[string]*Counter
 	gauge   map[string]*Gauge
 }
