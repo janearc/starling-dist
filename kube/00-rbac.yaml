@@ -1,0 +1,44 @@
+# starling's identity in the cluster, and the one permission it needs.
+#
+# This is the piece nothing else in the cluster has needed. starling establishes
+# who is calling by asking the API server to validate the caller's
+# service-account token -- a TokenReview -- and creating those is a permission.
+# Without it every authenticated request returns 503 and the logs say
+# "tokenreview refused with http 403", which is a deployment fault that no
+# amount of restarting fixes. OPERATION.md has a paragraph about diagnosing
+# exactly this, because it is the failure most likely to look like something
+# else.
+#
+# TokenReview is a ClusterRole rather than a Role: it is a non-namespaced
+# resource, so there is no namespaced form of this permission to grant.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: starling
+  namespace: ${ENV}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: starling-tokenreview
+rules:
+  # Exactly one verb on exactly one resource. starling reads no pods, no
+  # secrets, no configmaps -- it asks "is this token real and who does it
+  # belong to" and nothing else. A relay that could list secrets would be a
+  # much larger thing to have running.
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: starling-tokenreview
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: starling-tokenreview
+subjects:
+  - kind: ServiceAccount
+    name: starling
+    namespace: ${ENV}

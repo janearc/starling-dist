@@ -1,0 +1,27 @@
+# starling.test through traefik, so it is addressed by name like everything else.
+#
+# KNOWN GAP, and it matters for the agents this serves: .test does NOT resolve
+# inside pods. Verified 2026-09-01 -- flipr.test, grafana.test and hm.test all
+# return nothing from an agent pod, which uses CoreDNS with cluster.local search
+# domains and has no route to the host's .test resolution. So this route serves
+# an operator on the host, and agents must currently use
+# starling.<environment>.svc.cluster.local, which breaks the rule that every
+# service is reached by its short name.
+#
+# The fix is a CoreDNS rewrite pointing *.test at traefik, which is cluster-wide
+# rather than starling's to make. Until then this file is honest about serving
+# only half the callers.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: starling
+  namespace: ${ENV}
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`starling.test`)
+      kind: Rule
+      services:
+        - name: starling
+          port: 80

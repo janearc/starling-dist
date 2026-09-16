@@ -1,0 +1,8 @@
+# game: this repository
+#
+# name is the project: it is the block in the builder's own config that
+# says where this tree's two remotes are. nothing here holds a remote,
+# and a builder who has no block for it builds locally.
+name starling-dist
+
+# game: starling-dist, the relay agents talk through

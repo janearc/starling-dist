@@ -1,0 +1,89 @@
+# starling itself.
+#
+# One replica, and it must stay one. The store is a bbolt file on a ReadWriteOnce
+# volume; two replicas would either fail to schedule or fight over a file that
+# permits exactly one writer. Recreate rather than RollingUpdate for the same
+# reason -- a rolling update would briefly want two pods holding the same volume.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: starling
+  namespace: ${ENV}
+  labels:
+    app.kubernetes.io/name: starling
+    app.kubernetes.io/part-of: ${ENV}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: starling
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: starling
+        app.kubernetes.io/part-of: ${ENV}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8099"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: starling
+      securityContext:
+        runAsNonRoot: true
+        # distroless nonroot. fsGroup is what makes the PVC writable by it --
+        # without it startup fails at step one with "permission denied", which
+        # is the first thing that went wrong when the image was tested against a
+        # bind mount.
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: starling
+          # Tagged with the COMMIT HASH at deploy, never :dev and never a hash
+          # typed by hand: bin/deploy.sh substitutes ${COMMIT} with the commit
+          # it built, and the binary's version is the same hash, so the pod's
+          # image and its /health say one thing. A literal hash here means the
+          # next deploy applies whatever was typed last.
+          image: starling:${COMMIT}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8099
+          env:
+            - name: STARLING_ADDR
+              value: ":8099"
+            - name: STARLING_STORE
+              value: /var/lib/starling/starling.db
+            - name: STARLING_APISERVER
+              value: https://kubernetes.default
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 256Mi }
+          # /health does work -- it reads the store -- so a passing probe means
+          # something. It deliberately does not check the API server, because
+          # being unable to verify identity is degraded rather than down, and a
+          # probe that goes red when Kubernetes is briefly busy causes a restart
+          # that fixes nothing.
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: store
+              mountPath: /var/lib/starling
+      volumes:
+        - name: store
+          persistentVolumeClaim:
+            claimName: starling-store

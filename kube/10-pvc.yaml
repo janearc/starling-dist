@@ -1,0 +1,27 @@
+# The message store.
+#
+# local-path, which is the only storage class here and is a docker volume inside
+# the VM. It DIES WITH THE CLUSTER, and that is accepted rather than overlooked:
+# DESIGN.md states that losing the store loses every undelivered message, that
+# there is no replay, and that the remedy is to roll the deployment. A weekly
+# rebuild therefore drops in-flight conversation, which is the cheapest thing
+# here to recreate.
+#
+# A hostPath on the host would survive rebuilds, and was rejected: it
+# lands on virtiofs, which does not honour ownership, so a non-root process
+# cannot reliably write there. Verified the hard way -- the image run against a
+# bind mount failed with "permission denied" at startup.
+#
+# 1Gi is enormous for what this holds. Messages are deleted on delivery and
+# retired channels are deleted on claim, so the steady state is kilobytes; the
+# size is here so nobody has to think about it again.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: starling-store
+  namespace: ${ENV}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

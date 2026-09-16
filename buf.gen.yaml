@@ -1,0 +1,11 @@
+version: v2
+# Same arrangement as flipr: protoc-gen-go only, no grpc plugin. The wire is
+# protojson over plain HTTP. gRPC would drag HTTP/2 and client stubs into a
+# service that moves small JSON objects between four processes.
+#
+# module= strips the module prefix so files land at gen/, not
+# gen/github.com/janearc/starling-dist/...
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: module=github.com/janearc/starling-dist

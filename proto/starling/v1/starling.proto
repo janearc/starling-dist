@@ -1,0 +1,225 @@
+syntax = "proto3";
+
+// starling -- the relay agents talk through instead of talking to each other.
+//
+// Named for the murmuration, which is the coordination wanted, and for the
+// mimicry, which is the failure guarded against: in August 2026 a family of
+// agents adopted each other's register until they all spoke in the same
+// escalating voice and quoted things nobody had said.
+// Messages passing between them untouched is how that travelled.
+//
+// THE ONE RULE THIS SCHEMA EXISTS TO ENFORCE: a sender cannot write its own
+// name. Send has no `from` field, deliberately and permanently. Identity is
+// taken from the Kubernetes service-account token the pod already carries --
+// signed by the API server, naming the pod, unobtainable by any other pod --
+// and stamped into the Envelope by starling. An agent may be as inaccurate as
+// it likes about who it is; the envelope disagrees and the envelope was not
+// written by the claimant.
+//
+// This is the same principle as the hostname and the uid, applied to the
+// message rather than the process. flipr's oplog has a `caller` field taken
+// from an X-Flipr-Caller header, which its own client comments describe as
+// "self-declared attribution" -- correct for a flag store where the field is a
+// grep convenience, and exactly what must not happen here.
+//
+// WHY THE WIRE ENFORCES IT RATHER THAN THE HANDLER: parsing rejects unknown
+// fields, so a payload carrying `from` fails to decode and never reaches any
+// code that could be tempted to trust it. Rejecting is not the same as
+// ignoring: a field that is ignored still gets written by some future client,
+// still appears in some log, and is authoritative-looking by the time anyone
+// notices.
+package starling.v1;
+
+option go_package = "github.com/janearc/starling-dist/gen/starlingpb";
+
+// What an agent posts. Note what is absent.
+message Send {
+  // Alias or pod name. starling resolves aliases from flipr, so an agent
+  // addresses "ingest" and never learns which pod that is -- not as a secret
+  // (there is nothing listening in an agent pod, so knowing would buy nothing)
+  // but because a name an agent can read is a role it can inhabit.
+  string to = 1;
+
+  // question | answer | notice. A closed set kept as a string rather than an
+  // enum so an unknown kind is a droppable message rather than a schema
+  // migration; the drop is counted and visible.
+  string kind = 2;
+
+  // The free-text form. Bounded hard, so that it is a note rather than a
+  // place to put an argument. Exclusive with the three fields below: a Send
+  // carries a body or an assertion, never both and never neither.
+  string body = 3;
+
+  // Envelope id being answered, for threading. Empty for an opening message.
+  string in_reply_to = 4;
+
+  // THE ASSERTION FORM, AND WHY IT HAS NO NARRATIVE FIELD.
+  //
+  // A schema is a filter that needs no model. If a message has fields for a
+  // claim, its evidence and where to look, and no field for narrative, there is
+  // nowhere in it for rhetoric to live -- not because anything judged the
+  // rhetoric, but because the shape does not have a slot the right size for it.
+  // Measured on 2026-09-01, the peer channel carried the highest emphasis
+  // density of any text in this estate: 3.7 to 6.6 capitalised words per
+  // hundred, against 0.17 to 0.80 in the same estate's documents. That is what
+  // is being taken away, and taking it away mechanically costs nothing and
+  // cannot be wrong in an interesting way.
+  //
+  // Each field is capped on its own rather than as a lump, which is the part
+  // that does the work. One combined budget lets a sender spend all of it on
+  // one field and write the paragraph anyway.
+
+  // What is being asserted, in a sentence. Capped near a sentence's length.
+  string claim = 5;
+
+  // What supports it: a log line, an error string, a diff hunk, a number. The
+  // machines get quoted here; people do not.
+  string evidence = 6;
+
+  // Where to look -- a repo, a ref, a path, a url. Required alongside a claim.
+  // An assertion with nowhere to go and see for yourself is the thing this
+  // relay exists to stop propagating.
+  string location = 7;
+}
+
+// Who sent it, as established rather than as claimed. Every field here comes
+// from the verified token or from starling's own clock.
+message Sender {
+  // From the token's kubernetes.io.pod.name claim.
+  string pod = 1;
+
+  // From kubernetes.io.pod.uid. Distinguishes this agent-2 from the agent-2
+  // that occupied the slot yesterday -- a generation identifier assigned by the
+  // API server, which is precisely what August lacked.
+  string pod_uid = 2;
+
+  // The ephemeral channel this session claimed at start. A pod outlives a
+  // session, so pod identity alone would let a new occupant read mail written
+  // to its predecessor. Session directories are never reused; neither is this.
+  string channel = 3;
+}
+
+// What starling stores and delivers.
+message Envelope {
+  string id = 1;
+  string ts = 2;
+
+  // Stamped. Never supplied.
+  Sender from = 3;
+
+  // The resolved pod, and the alias the sender actually addressed. Both are
+  // kept: the alias is what a human reads, the pod is what happened.
+  string to = 4;
+  string to_alias = 5;
+
+  string kind = 6;
+  string body = 7;
+  string in_reply_to = 8;
+
+  Disposition disposition = 9;
+
+  // Set when disposition is DROPPED or NORMALIZED. A drop with no stated
+  // reason is indistinguishable from a bug.
+  string reason = 10;
+
+  // The assertion form, carried through unchanged. Kept as three fields on the
+  // envelope rather than flattened into body, so that a recipient reading its
+  // mail and an analyst reading the archive both see the same shape the sender
+  // was held to. Flattening here would put the narrative field back in the one
+  // place it matters most, which is the record.
+  string claim = 11;
+  string evidence = 12;
+  string location = 13;
+}
+
+// What starling did with a message. Recorded on the envelope rather than
+// inferred, because "why did that never arrive" must have an answer that does
+// not require reading the relay's source.
+enum Disposition {
+  DISPOSITION_UNSPECIFIED = 0;
+  DISPOSITION_DELIVERED = 1;
+  DISPOSITION_DROPPED = 2;
+
+  // Delivered, but the body was rewritten on the way through. Counted
+  // separately: a rising normalization rate on one sender is a signal about
+  // that agent before anybody reads a message.
+  DISPOSITION_NORMALIZED = 3;
+}
+
+// Claim a channel. Sent once at session start.
+message ClaimChannel {
+  // Free-text, for the operator's benefit in dashboards. Not identity, and not
+  // trusted for anything -- identity is the token.
+  string note = 1;
+}
+
+message ClaimChannelResponse {
+  string channel = 1;
+  Sender identity = 2;
+}
+
+// Long-poll for mail. The request carries no identity: whose inbox this is
+// comes from the token, so there is no parameter to get wrong and none to
+// point at somebody else.
+message Inbox {
+  // Seconds to hold the connection open when the inbox is empty. Bounded by
+  // starling. An agent has no clock of its own -- an idle Claude session is
+  // blocked on a read, not looping -- so this call is made by the in-pod
+  // poller, which is the only thing in that pod with a tick.
+  int32 wait_seconds = 1;
+
+  // The channel this session claimed. PROOF, not an address: whose inbox this
+  // is still follows from the token, and a wrong value is refused rather than
+  // redirected, so no value here reads another session's mail.
+  //
+  // Without it, a new session in a recycled pod could skip claiming and poll,
+  // and the pod-keyed lookup would hand it the previous occupant's mail --
+  // retirement was voluntary because starling had no signal that the session
+  // had changed.
+  string channel = 2;
+}
+
+message InboxResponse {
+  repeated Envelope messages = 1;
+}
+
+// Ask for a ticket to a peer -- permission for these two sessions to exchange
+// messages, which closes after thirty minutes with nothing on it.
+//
+// A ticket controls WHO may talk to WHOM and FOR HOW LONG. It says nothing
+// about what they may say; that is the size cap and the message shape, which
+// are a different question answered in a different place.
+//
+// NOTE WHAT IS ABSENT, AGAIN. There is no ticket field on Send, deliberately
+// and permanently. A ticket a sender presents would be a field a sender writes
+// about itself, which is the thing this schema exists to prevent, arriving by a
+// side door and dressed as session management. starling looks the ticket up by
+// the two channel ids it stamped: the sender's, from the token, and the
+// recipient's, which starling resolved. The id below is a handle for logs and
+// for the operator and there is nowhere to send it back.
+message RequestTicket {
+  // Alias or pod name, resolved the same way Send.to is.
+  string to = 1;
+}
+
+message Ticket {
+  // A handle, not a credential. Nothing accepts it back.
+  string id = 1;
+
+  // The name the caller used, echoed. NOT the pod it resolved to: resolution
+  // never travels back to an agent, because a name an agent can read is a role
+  // it can inhabit.
+  string to = 2;
+
+  // How long the ticket has left with nothing sent on it. Restarted by every
+  // message either end sends, and by asking again.
+  int32 expires_in_seconds = 3;
+}
+
+// Liveness, from the poller rather than from the agent. Lets starling tell
+// "pod alive, session idle" apart from "session gone" -- an agent that has
+// stopped reading its input cannot report anything, and its silence is
+// otherwise identical to having nothing to say.
+message Heartbeat {
+  string channel = 1;
+}

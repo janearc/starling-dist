@@ -1,0 +1,6 @@
+# repo-local pinned toolchain, installed by bin/gen.sh
+.tools/
+
+# build output
+/starling
+/starling-poller

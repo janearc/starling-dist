@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: starling
+  namespace: ${ENV}
+  labels:
+    app.kubernetes.io/name: starling
+spec:
+  selector:
+    app.kubernetes.io/name: starling
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
